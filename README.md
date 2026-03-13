@@ -20,14 +20,14 @@ A three-tab Streamlit dashboard:
 
 2. **IR requirement vs. reality** — Heatmap of P97.5 by hour × month. Line chart showing the gap between P97.5 and P75 by hour, with the excess shaded.
 
-3. **Battery implications** — Modo-style monthly BESS revenue stack (DA energy, RT energy, ancillary services) with interactive IR opportunity cost overlay.
+3. **Battery implications** — Monthly BESS revenue stack (DA energy, RT energy, ancillary services) with interactive IR opportunity cost overlay.
 
 ## Quickstart
 
 ```bash
 # Clone and set up
-git clone <repo-url>
-cd <repo>
+git clone git clone https://github.com/jaskcodes/caiso_ir_uncertainty.git
+cd caiso_ir_uncertainty
 pip install -r requirements.txt
 
 # Pull real CAISO data (~15-30 min, rate-limited by OASIS)
