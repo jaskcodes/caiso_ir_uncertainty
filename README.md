@@ -35,7 +35,7 @@ Three tabs:
 ## Quickstart
 
 ```bash
-git clone git clone https://github.com/jaskcodes/caiso_ir_uncertainty.git
+git clone https://github.com/jaskcodes/caiso_ir_uncertainty.git
 cd caiso_ir_uncertainty
 pip install -r requirements.txt
 
