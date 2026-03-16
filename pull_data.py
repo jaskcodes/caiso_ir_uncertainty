@@ -155,8 +155,11 @@ def compute_net_load_error(load_actual, load_forecast, fuel_mix, ren_forecast):
     m = act.join(forecasts, how="inner")
     m["Net_Load_Error_MW"] = m["Net_Load_Actual_MW"] - m["Net_Load_Forecast_DAM_MW"]
     m = m.reset_index().rename(columns={m.index.name or "index": "Time"})
-    m["Hour"] = m["Time"].dt.hour + 1
-    m["Month"] = m["Time"].dt.month
+
+    # Convert to Pacific for hour labels (CAISO operates in Pacific)
+    time_pt = m["Time"].dt.tz_convert("US/Pacific")
+    m["Hour"] = time_pt.dt.hour + 1  # HE1-HE24 in Pacific
+    m["Month"] = time_pt.dt.month
     m["Season"] = m["Month"].map({
         12:"Winter",1:"Winter",2:"Winter",3:"Spring",4:"Spring",5:"Spring",
         6:"Summer",7:"Summer",8:"Summer",9:"Fall",10:"Fall",11:"Fall",

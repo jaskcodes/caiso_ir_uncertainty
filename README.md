@@ -1,116 +1,110 @@
-# CAISO Imbalance Reserve Uncertainty Analysis
+# CAISO Imbalance Reserve: Is the 97.5th Percentile Input Too High?
 
-**Is CAISO's 97.5th-percentile imbalance reserve requirement too high?**
+## The question
 
-This project analyzes two years of CAISO net load forecast error data to evaluate whether the imbalance reserve (IR) procurement requirement — set at the 97.5th percentile of historical uncertainty — is excessive relative to what is actually needed in real time.
+CAISO's new imbalance reserve (IR) product under EDAM will procure capacity to cover net load forecast uncertainty between the day-ahead and real-time markets. The demand curve that tells the co-optimization how much IR to buy targets the **97.5th percentile** of historical forecast error for every hour of every day.
 
-## Problem statement
+But this is more conservative than what operators have historically chosen. Under the RUC process, operators had discretion to set the coverage level based on real-time conditions. The DMM found that in Q3 2024, operators chose to apply the 97.5th percentile on only **15% of days**. On 51% of days they chose the 75th percentile. On 34% they chose the 50th. The new IR product removes that discretion and fixes P97.5 for all hours of all days.
 
-CAISO's Day-Ahead Market Enhancements (DAME) introduced an imbalance reserve product to manage net load forecast uncertainty between the day-ahead and real-time markets. The IR requirement is calculated using quantile regression on historical forecast errors, targeting the 97.5th percentile for upward reserves and the 2.5th percentile for downward reserves.
+The DMM's assessment: the IR demand curve "may be much too high during most hours" ([Q3 2024 Report](https://www.caiso.com/documents/2024-third-quarter-report-on-market-issues-and-performance-dec-23-2024.pdf), Section 10.3.1).
 
-CAISO's own Department of Market Monitoring (DMM) has flagged concerns: in Q3 2024, the 97.5th percentile target was used in the residual unit commitment on only ~15% of days. On all other days, actual uncertainty only required coverage at the 50th or 75th percentile.
-
-This matters for batteries. Battery storage in CAISO primarily earns revenue through energy arbitrage — charging during midday solar hours and discharging during the evening ramp. When battery capacity is committed to IR, it cannot participate in arbitrage. If IR procurement is systematically excessive, batteries face an unnecessary opportunity cost.
+This is an input problem. The co-optimization works. The question is whether the input feeding it is set too conservatively.
 
 ## What this tool does
 
-A three-tab Streamlit dashboard:
+This dashboard explores the underlying forecast error distribution that feeds the IR requirement, and shows how it interacts with battery operations. It does **not** replicate CAISO's daily mosaic quantile regression, which requires non-public data and produces a fresh conditional requirement each day. Instead, it characterizes the unconditional distribution of historical DA-to-RT forecast errors using publicly available OASIS data.
 
-1. **Uncertainty profile** — Hourly violin plots of net load forecast error distribution, with P97.5 and P75 overlaid. Histogram to assess distributional shape. Seasonal filtering.
+Three tabs:
 
-2. **IR requirement vs. reality** — Heatmap of P97.5 by hour × month. Line chart showing the gap between P97.5 and P75 by hour, with the excess shaded.
+1. **Uncertainty profile** - Violin plots of net load forecast error by hour (Pacific time), with P97.5 and P75 overlaid. Histogram showing distributional shape. Shows where the forecast is accurate and where it struggles.
 
-3. **Battery implications** — Monthly BESS revenue stack (DA energy, RT energy, ancillary services) with interactive IR opportunity cost overlay.
+2. **Where uncertainty concentrates** - Heatmap of forecast error volatility (std dev) by hour and month. Reveals that uncertainty is driven by solar transition hours, not uniformly distributed.
+
+3. **IR vs. battery arbitrage** - Overlays the DA price profile with the uncertainty profile by hour. Shows that the hours with highest uncertainty (solar transition, HE9-16) overlap with the hours batteries charge (cheap midday prices), while the hours with highest arbitrage value (evening ramp) have low uncertainty. IR and battery arbitrage compete for the same capacity during the same hours.
+
+## Key findings
+
+- **The forecast has a negative bias** (approximately -1,100 MW mean). The DA forecast consistently over-predicts net load, likely because wind and solar beat day-ahead expectations. This bias is larger than expected and may partially reflect a data alignment issue between the two OASIS sources used (see Limitations).
+
+- **Uncertainty concentrates in solar transition hours.** HE9 through HE16 (Pacific) show the widest forecast error distributions and the highest volatility, peaking around 2,100 MW std dev at HE13-15. Overnight and evening hours have minimal uncertainty (400-500 MW std dev).
+
+- **IR and battery arbitrage compete for the same hours.** The battery charge window (HE10-15, cheapest prices) overlaps with peak forecast uncertainty. IR capacity held for these hours directly competes with the charging opportunity. Meanwhile, the discharge window (HE17-21, most expensive prices) has low uncertainty, meaning IR held for those hours locks up the most valuable arbitrage capacity against a risk the data says is small.
+
+- **Under RUC, operators made this distinction.** They applied higher coverage to peak hours and lower coverage (or none) to off-peak hours. They used P97.5 on only 15% of days. The new IR product does not make this distinction.
 
 ## Quickstart
 
 ```bash
-# Clone and set up
 git clone git clone https://github.com/jaskcodes/caiso_ir_uncertainty.git
 cd caiso_ir_uncertainty
 pip install -r requirements.txt
 
-# Pull real CAISO data (~15-30 min, rate-limited by OASIS)
+# Pull real CAISO data (approximately 20 min, OASIS rate-limited)
 python pull_data.py
 
 # Launch dashboard
 streamlit run app.py
 ```
 
-The app works immediately with synthetic data if you skip the data pull step. Synthetic data mimics realistic CAISO patterns but is not real market data.
+The app runs immediately with synthetic data if you skip the data pull.
 
 ## Data sources
 
-All data is publicly available from CAISO:
+All publicly available from CAISO OASIS via [gridstatus](https://github.com/gridstatus/gridstatus):
 
-| Dataset | OASIS report | Description |
+| Dataset | Source | Used for |
 |---|---|---|
-| Load actual | Today's Outlook | 5-min actual system load |
-| Load forecast | `SLD_FCST` (DAM) | Hourly day-ahead load forecast |
-| Renewable forecast | `SLD_REN_FCST` (DAM) | Hourly day-ahead wind + solar forecast |
-| Fuel mix | Today's Outlook | 5-min actual generation by fuel type |
-| DAM LMPs | `PRC_LMP` (DAM) | Hourly day-ahead prices at NP15, SP15, ZP26 |
+| Actual load (5-min) | Today's Outlook | Computing actual net load |
+| DA load forecast (hourly) | SLD_FCST | Computing forecasted net load |
+| DA wind+solar forecast (hourly) | SLD_REN_FCST | Computing forecasted net load |
+| Actual fuel mix (5-min) | Today's Outlook | Actual wind + solar generation |
+| DA LMPs (hourly) | PRC_LMP | DA price profile (SP15) |
 
-Data is fetched via the [gridstatus](https://github.com/gridstatus/gridstatus) Python library, which wraps the CAISO OASIS API.
+**Net load forecast error** = (actual load - actual wind - actual solar) - (DA load forecast - DA wind forecast - DA solar forecast). Positive = under-forecast (reserves would be needed). 5-minute actuals resampled to hourly. All hours in Pacific time.
 
-## Methodology
+## Limitations
 
-**Net load forecast error** = (Actual load − Actual wind − Actual solar) − (DA load forecast − DA wind forecast − DA solar forecast)
+- **Data coverage:** Jan through Mar and Oct through Dec of 2024-2025. Summer months (Apr through Sep) are mostly missing due to Today's Outlook retention limits. Summer would likely show higher uncertainty from solar variability. These findings are conservative.
 
-- Positive error → actual net load exceeded the DA forecast (under-forecast)
-- Negative error → actual net load was below DA forecast (over-forecast)
+- **Mean bias (-1,100 MW):** Larger than expected. Could reflect genuine forecast conservatism (solar/wind beating expectations) or a data alignment issue. CAISO's FAQ notes that Today's Outlook (telemetry-based) and OASIS (market-based) data don't directly match.
 
-5-minute actuals are resampled to hourly to align with DAM forecast granularity. The analysis covers January 2024 through December 2025.
+- **Unconditional percentiles, not conditional.** CAISO computes a fresh IR requirement daily using mosaic quantile regression conditioned on that day's forecasts. This analysis pools all days by hour. The percentiles shown don't correspond to any single day's requirement. However, the DMM found the mosaic regression at P97.5 had zero percent statistical significance due to small sample sizes (4-5 observations per hour), so the conditional approach may not improve on unconditional percentiles at this coverage level.
+
+- **IR product has not launched yet.** The analysis uses the RUC experience as a proxy. The DMM draws the same comparison in their quarterly reports, but actual IR market outcomes may differ.
+
+## What I'd build next
+
+**With EDAM IR data (once publicly available):**
+- IR utilization rate: what percent of awarded capacity is dispatched as energy in real time?
+- Net IR economics: capacity payment received versus arbitrage foregone
+- Compare actual daily IR requirements from the mosaic regression against the unconditional percentiles shown here
+
+**With more time:**
+- Fill summer gap using OASIS SLD_FCST actuals instead of Today's Outlook
+- Investigate the -1,100 MW mean bias: is it real or a data join artifact?
+- Model reliability impact of lowering coverage to P75 or P90
+- Quantify the EDAM diversity benefit: how much does uncertainty shrink as more BAAs join?
+
+**Longer-term question:** The historical error distribution was estimated when California had roughly 5 GW of battery storage. Today it has over 12 GW. Batteries charging midday absorb solar surplus; batteries discharging evening reduce the ramp. The distribution itself may have changed. Does the P97.5 requirement reflect the grid as it is today, or the grid as it was?
 
 ## Key references
 
-- CAISO DMM, *Q3 2024 Report on Market Issues and Performance* — documents the 97.5th percentile being used on only 15% of days
-- CAISO DMM, *2024 Special Report on Battery Storage* — battery arbitrage patterns and ancillary service participation
-- CAISO, *Day-Ahead Market Enhancements Issue Paper* — original IR product design
-- CAISO DMM, *Review of Mosaic Quantile Regression* — uncertainty calculation methodology
+- CAISO DMM, [Q3 2024 Report on Market Issues and Performance](https://www.caiso.com/documents/2024-third-quarter-report-on-market-issues-and-performance-dec-23-2024.pdf) - Section 10.3: operators chose P97.5 on 15% of days; DMM flags demand curve "may be much too high"
+- CAISO DMM, [Review of Mosaic Quantile Regression](https://www.caiso.com/Documents/Review-of-the-Mosaic-Quantile-Regression-Nov-20-2023.pdf) - how the uncertainty calculation works
+- CAISO DMM, [2024 Special Report on Battery Storage](https://www.caiso.com/documents/2024-special-report-on-battery-storage-may-29-2025.pdf) - batteries provide 84% of CAISO regulation; arbitrage patterns
+- CAISO, [DAME Issue Paper/Straw Proposal](https://www.caiso.com/Documents/IssuePaper-StrawProposal-DayAheadMarketEnhancements.pdf) - original IR product design
+- ESIG, [Imbalance Reserve Webinar Q&A](https://www.esig.energy/wp-content/uploads/2024/02/Friedrich-Webinar-QA_JF.pdf) - CAISO engineer explains IR in plain language
 
 ## Repo structure
 
 ```
-├── app.py              # Streamlit dashboard
-├── pull_data.py        # CAISO data pipeline (gridstatus)
-├── requirements.txt    # Python dependencies
-├── data/               # CSV cache (gitignored, regenerate with pull_data.py)
-│   └── .gitkeep
-├── .gitignore
-└── README.md
+app.py              # Streamlit dashboard (3 tabs)
+pull_data.py        # CAISO data pipeline via gridstatus
+requirements.txt
+data/               # CSV cache (gitignored)
+README.md
 ```
 
-## Limitations
+## Tools and AI usage
 
-**Data coverage gaps.** The Today's Outlook historical endpoint (used for actual load and fuel mix) has limited retention. The current dataset covers Jan–Mar and Oct–Dec of 2024–2025, with Apr–Sep largely missing due to the actuals source dropping off. Summer months — where solar variability and load peaks would likely show even higher uncertainty — are not represented. The findings from winter and shoulder months should be considered conservative.
-
-**Simplified battery revenue model.** The revenue stack assumes perfect arbitrage capture (charge at the trough, discharge at the peak). Real batteries achieve 60–80% of the theoretical spread due to state-of-charge constraints, bid strategy, market power mitigation, and the ancillary service state-of-charge constraint (ASSOC). RT energy and AS revenues are estimated at industry-average percentages (12% and 18% of the DA stack) rather than computed from actual dispatch data.
-
-**IR requirement is modeled, not observed.** The actual IR procurement volumes under DAME/EDAM are not yet publicly available. This analysis uses the historical net load forecast error distribution as a proxy for what the IR requirement *would be* at the 97.5th percentile, rather than measuring actual IR awards.
-
-**Single pricing node.** Battery revenues are estimated using SP15 hub prices. Individual battery nodes can see significantly different spreads due to local congestion, especially in constrained areas.
-
-## Future work
-
-**With actual EDAM imbalance reserve data:**
-- Compare realized IR awards against the P97.5 uncertainty requirement — how often is the full award dispatched as energy in real time?
-- Measure IR utilization rate: what percentage of awarded IR capacity is actually called upon, and at what hours?
-- Quantify the IR cost allocation: who is paying for the excess procurement, and how does it flow through to LSE rates?
-- Assess whether the WEIM diversity benefit post-EDAM go-live reduces the net uncertainty CAISO needs to cover internally, further shrinking the case for P97.5
-
-**With more time:**
-- Pull actuals from OASIS (`SLD_FCST` with `market_run_id=ACTUAL`) instead of Today's Outlook to fill the summer data gap
-- Validate the revenue model against Modo Energy's published CAISO BESS benchmark ($40–51/kW-year in 2024–2025) and calibrate a capture rate
-- Use 60-day disclosure data to observe actual battery dispatch schedules and compare against the model's assumed charge/discharge windows
-- Incorporate the mosaic quantile regression methodology (the actual method CAISO uses) rather than simple historical percentiles, to test whether the regression approach itself produces excessive requirements
-- Model alternative IR procurement levels (P75, P90) and simulate the reliability impact — how many hours would have been short, and by how much?
-
-
-This project was built with significant AI assistance (Claude) for:
-- Research on CAISO DMM findings
-- Data pipeline architecture and OASIS API navigation
-- Dashboard layout and visualization design
-- Code generation and iteration
-
-The analytical framing, domain knowledge, and problem selection are my own.
+Built with AI assistance (Claude) for: OASIS API research, data pipeline code, chart design, and iteration. The problem selection, market context, and analytical framing are my own.

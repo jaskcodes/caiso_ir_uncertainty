@@ -4,8 +4,8 @@ app.py — CAISO Imbalance Reserve Uncertainty Dashboard
 Three tabs. Each answers one question:
 
 1. What does net load uncertainty actually look like?
-2. Is the 97.5th percentile IR requirement justified?
-3. What does this cost battery operators?
+2. Where does forecast uncertainty concentrate?
+3. How does IR interact with battery operations?
 
 Usage: streamlit run app.py
 """
@@ -95,11 +95,12 @@ with st.sidebar:
                             format_func=lambda x: pd.Timestamp(2024,x,1).strftime("%b"))
     st.divider()
     st.markdown(
-        "**Thesis:** CAISO procures imbalance reserves\n"
-        "at the 97.5th percentile of net load uncertainty\n"
-        "for every hour. The DMM found this threshold was\n"
-        "needed on only ~15% of days. The excess locks\n"
-        "battery capacity away from energy arbitrage."
+        "**Thesis:** CAISO's new IR product will set\n"
+        "the demand curve at P97.5 for all hours, all\n"
+        "days. But under RUC, operators with discretion\n"
+        "chose P97.5 on only 15% of days. This dashboard\n"
+        "explores the underlying forecast error distribution\n"
+        "and the cost to batteries."
     )
 
 filt = df[df["Season"].isin(seasons) & df["Month"].isin(months)].copy()
@@ -111,22 +112,23 @@ filt = df[df["Season"].isin(seasons) & df["Month"].isin(months)].copy()
 tab1, tab2, tab3 = st.tabs([
     "📊 Uncertainty profile",
     "📈 Requirement vs. reality",
-    "🔋 Cost to batteries",
+    "🔋 IR vs. battery arbitrage",
 ])
 
 with tab1:
     st.header("What does net load uncertainty look like?")
     st.markdown(
         "Net load = demand minus wind and solar. The forecast error between "
-        "day-ahead and real-time determines how much imbalance reserve capacity "
-        "CAISO procures. Here is the actual distribution of that error."
+        "day-ahead and real-time is the uncertainty that the RUC process currently "
+        "manages, and that the new IR product under EDAM is designed to cover. "
+        "Here is the actual distribution of that error."
     )
 
     c1, c2, c3 = st.columns(3)
     err = filt["Net_Load_Error_MW"]
     c1.metric("Mean error", f"{err.mean():+,.0f} MW")
     c2.metric("Std deviation", f"{err.std():,.0f} MW")
-    c3.metric("P97.5 (IR target)", f"{err.quantile(0.975):+,.0f} MW")
+    c3.metric("P97.5", f"{err.quantile(0.975):+,.0f} MW")
 
     # Violin by hour — the core chart
     fig = go.Figure()
@@ -140,18 +142,18 @@ with tab1:
             scalemode="width", width=0.75,
         ))
 
-    # P97.5 line — the IR procurement threshold
+    # P97.5 and P75 lines — empirical percentiles of the historical distribution
     p975 = filt.groupby("Hour")["Net_Load_Error_MW"].quantile(0.975)
     fig.add_trace(go.Scatter(
         x=[f"HE{h}" for h in p975.index], y=p975.values,
-        mode="lines+markers", name="P97.5 — current IR target",
+        mode="lines+markers", name="P97.5 — top 2.5% of errors",
         line=dict(color="#EF4444", width=2, dash="dash"),
         marker=dict(size=4, color="#EF4444"),
     ))
     p75 = filt.groupby("Hour")["Net_Load_Error_MW"].quantile(0.75)
     fig.add_trace(go.Scatter(
         x=[f"HE{h}" for h in p75.index], y=p75.values,
-        mode="lines+markers", name="P75 — sufficient ~85% of days",
+        mode="lines+markers", name="P75 — top 25% of errors",
         line=dict(color="#F59E0B", width=1.5, dash="dot"),
         marker=dict(size=3, color="#F59E0B"),
     ))
@@ -167,11 +169,11 @@ with tab1:
     st.markdown(
         f"The mean error is **{err.mean():+,.0f} MW** — the DA forecast systematically "
         f"over-predicts net load, likely because wind and solar consistently beat "
-        f"day-ahead forecasts. But the P97.5 line tells a different story by hour: "
-        f"during the evening ramp (HE17–HE24), the upward tail reaches 2,000–4,500 MW "
-        f"— real reserves are needed. During midday hours, even P97.5 barely crosses "
-        f"zero. **The IR requirement is doing real work only in the evening; "
-        f"during the rest of the day it holds capacity against a risk that doesn't materialize.**"
+        f"day-ahead forecasts. The P97.5 line (red) shows the upper tail by hour: "
+        f"during the solar transition hours (HE9–HE16), the upward tail reaches "
+        f"2,000–4,500 MW — these are the hours with the most forecast uncertainty. "
+        f"During overnight and evening hours, the distribution is tighter and the "
+        f"upper tail stays near zero."
     )
 
     # Histogram with normal overlay — just to show shape
@@ -199,9 +201,9 @@ with tab1:
     st.markdown(
         f"Skewness: **{sk:.2f}** · Excess kurtosis: **{ku:.2f}** — "
         f"{'the distribution is approximately normal.' if abs(sk)<0.5 and abs(ku)<1 else 'the distribution departs from normality.'} "
-        f"{'The high kurtosis means the distribution is more peaked than a normal — most hours cluster tightly around the mean, but extreme events are more frequent than a Gaussian predicts. ' if ku > 1 else ''}"
-        f"This reinforces the case for dynamic, hour-specific IR procurement rather than "
-        f"a flat percentile applied uniformly."
+        f"{'The high kurtosis means the distribution is more peaked than a normal — most hours cluster tightly around the mean, but extreme events in the tails are more frequent than a Gaussian predicts. ' if ku > 1 else ''}"
+        f"This matters because the IR demand curve targets the 97.5th percentile — "
+        f"deep in the tail where the distribution's shape has the most impact."
     )
 
 
@@ -209,241 +211,156 @@ with tab1:
 # TAB 2 — Is the 97.5th percentile requirement justified?
 # ===========================================================================
 with tab2:
-    st.header("Is the P97.5 IR requirement justified?")
+    st.header("Where does forecast uncertainty concentrate?")
     st.markdown(
-        "CAISO's DMM found the 97.5th percentile was only needed in RUC on ~15% of "
-        "days (Q3 2024). On most days, the 50th or 75th percentile would have been "
-        "sufficient. The charts below show where and when the requirement exceeds "
-        "what's actually needed."
+        "Under the RUC process, operators had discretion to choose coverage levels — "
+        "they applied P97.5 on only 15% of days, choosing P75 on 51% and P50 on 34% "
+        "(DMM Q3 2024 Report, Section 10.3). The new IR product under EDAM will fix "
+        "the demand curve at P97.5 for all hours of all days. The DMM's assessment: "
+        "this 'may be much too high during most hours.' The charts below show the "
+        "underlying forecast error distribution — the same uncertainty both RUC and "
+        "IR are designed to cover."
     )
 
-    # Heatmap — when is uncertainty highest?
-    heat = filt.groupby(["Month","Hour"])["Net_Load_Error_MW"].quantile(0.975).reset_index()
+    # Heatmap — std dev of forecast error by hour × month
+    heat = filt.groupby(["Month","Hour"])["Net_Load_Error_MW"].std().reset_index()
     hp = heat.pivot(index="Month", columns="Hour", values="Net_Load_Error_MW")
     fhm = go.Figure(go.Heatmap(
         z=hp.values,
         x=[f"HE{h}" for h in hp.columns],
         y=[pd.Timestamp(2024,m,1).strftime("%b") for m in hp.index],
-        colorscale="RdYlBu_r", colorbar_title="MW",
+        colorscale="YlOrRd", colorbar_title="MW",
         text=np.round(hp.values).astype(int), texttemplate="%{text}", textfont=dict(size=9),
     ))
     fhm.update_layout(
-        title="P97.5 net load error by hour × month — where uncertainty concentrates",
+        title="Std deviation of forecast error by hour × month — where uncertainty is highest",
         height=350, template="plotly_white",
         margin=dict(l=60,r=20,t=50,b=40),
     )
     st.plotly_chart(fhm, use_container_width=True)
 
-    # The gap chart — two lines with shaded area between
-    st.subheader("IR requirement vs. what's actually needed")
-    gap = filt.groupby("Hour")["Net_Load_Error_MW"].agg(
-        P50=lambda x: x.quantile(0.50),
-        P75=lambda x: x.quantile(0.75),
-        P975=lambda x: x.quantile(0.975),
-    ).reset_index()
-
-    x_labels = [f"HE{h}" for h in gap["Hour"]]
-
-    fg = go.Figure()
-
-    # Shaded area between P75 and P97.5 — the excess
-    fg.add_trace(go.Scatter(
-        x=x_labels, y=gap["P975"],
-        mode="lines", line=dict(width=0), showlegend=False,
-    ))
-    fg.add_trace(go.Scatter(
-        x=x_labels, y=gap["P75"],
-        mode="lines", line=dict(width=0), showlegend=False,
-        fill="tonexty", fillcolor="rgba(239,68,68,0.15)",
-    ))
-
-    # P97.5 line
-    fg.add_trace(go.Scatter(
-        x=x_labels, y=gap["P975"],
-        mode="lines+markers", name="P97.5 — current IR target",
-        line=dict(color="#EF4444", width=2.5),
-        marker=dict(size=5, color="#EF4444"),
-    ))
-    # P75 line
-    fg.add_trace(go.Scatter(
-        x=x_labels, y=gap["P75"],
-        mode="lines+markers", name="P75 — sufficient ~85% of days",
-        line=dict(color="#F59E0B", width=2.5),
-        marker=dict(size=5, color="#F59E0B"),
-    ))
-    # Median for reference
-    fg.add_trace(go.Scatter(
-        x=x_labels, y=gap["P50"],
-        mode="lines", name="P50 — median error",
-        line=dict(color="#3B82F6", width=1.5, dash="dot"),
-    ))
-
-    fg.add_hline(y=0, line_color="gray", line_width=0.5)
-
-    # Annotate the gap at the peak hour
-    peak_idx = gap["P975"].idxmax()
-    peak_hour = gap.loc[peak_idx, "Hour"]
-    peak_975 = gap.loc[peak_idx, "P975"]
-    peak_75 = gap.loc[peak_idx, "P75"]
-    fg.add_annotation(
-        x=f"HE{peak_hour}", y=(peak_975 + peak_75) / 2,
-        text=f"  {peak_975 - peak_75:,.0f} MW<br>  excess",
-        showarrow=False, font=dict(size=11, color="#EF4444"),
-        xanchor="left",
-    )
-
-    fg.update_layout(
-        height=400, template="plotly_white",
-        margin=dict(l=60,r=20,t=30,b=50),
-        yaxis_title="Forecast error (MW)", xaxis_title="Hour ending",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-    )
-    st.plotly_chart(fg, use_container_width=True)
-
-    avg_excess = (gap["P975"] - gap["P75"]).mean()
-    evening_excess = gap.loc[gap["Hour"].isin(range(17,25)), "P975"].mean() - gap.loc[gap["Hour"].isin(range(17,25)), "P75"].mean()
-    midday_p975 = gap.loc[gap["Hour"].isin(range(7,16)), "P975"].mean()
     st.markdown(
-        f"The shaded red area is the gap between what's needed at P75 and what's procured "
-        f"at P97.5. On average that gap is **{avg_excess:,.0f} MW/hour**, peaking at "
-        f"**{gap['P975'].max() - gap['P75'].max():,.0f} MW** during the evening ramp. "
-        f"During midday hours (HE7-HE15), the P97.5 requirement averages just "
-        f"**{midday_p975:,.0f} MW** — barely above zero — yet capacity must still be held."
+        "Higher values mean the forecast is more volatile at that hour — the system "
+        "faces more uncertainty and reserves are more likely to be needed. Low values "
+        "mean the forecast is consistently accurate.\n\n"
+        "Under the RUC process, operators had discretion to choose how much capacity "
+        "to hold based on conditions. They applied the 97.5th percentile on only 15% "
+        "of days, choosing P75 on 51% and P50 on 34% (DMM Q3 2024, Section 10.3). "
+        "The new IR product under EDAM will fix the demand curve at P97.5 for all "
+        "hours of all days — including the low-volatility hours where this heatmap "
+        "shows minimal uncertainty. The DMM's assessment: the demand curve 'may be "
+        "much too high during most hours.'"
     )
 
 
 # ===========================================================================
-# TAB 3 — What does this cost battery operators?
+# TAB 3 — How does IR interact with battery operations?
 # ===========================================================================
 with tab3:
-    st.header("What does this cost batteries?")
+    st.header("How does IR interact with battery operations?")
     st.markdown(
-        "Batteries in CAISO earn ~70% of merchant revenue from DA energy arbitrage: "
-        "charging during midday solar hours (low prices) and discharging during the "
-        "evening ramp (high prices). Capacity committed to IR cannot arbitrage. "
-        "This chart estimates what that costs."
+        "Batteries arbitrage the DA price curve — charge when prices are low (solar "
+        "trough midday), discharge when prices are high (evening ramp). The IR product "
+        "holds capacity for hours with high forecast uncertainty. The question is: "
+        "**do these two needs compete for the same hours?**"
     )
 
-    # User controls
-    cl, cr = st.columns(2)
-    with cl:
-        batt_mw = st.slider("Battery capacity (MW)", 50, 500, 100, 25)
-        duration = st.slider("Duration (hours)", 1, 8, 4)
-    with cr:
-        eff_pct = st.slider("Round-trip efficiency (%)", 80, 95, 88)
-        ir_pct = st.slider("% capacity held for IR", 0, 100, 30, 5,
-                           help="Portion of battery locked for imbalance reserves")
-
-    eff = eff_pct / 100
-    ir_frac = ir_pct / 100
-
-    # Hours are in UTC in the LMP data. CAISO Pacific time:
-    #   Solar trough (charge):  HE10-15 PT = HE17-22 UTC
-    #   Evening ramp (discharge): HE17-21 PT = HE0-4 UTC (next day) → HE24,1,2,3,4
-    charge_hrs = list(range(17, 23))       # UTC: cheap solar hours
-    discharge_hrs = [24, 1, 2, 3, 4]       # UTC: expensive evening PT hours
-    n_dis = min(duration, len(discharge_hrs))
-
-    # Monthly DA spread — find the right LMP column
-    lmp_m = lmp_df.copy()
+    # --- Chart 1: Price profile + uncertainty overlay ---
+    # Avg DA price by hour
     lmp_col = "LMP"
-    for c in lmp_m.columns:
+    for c in lmp_df.columns:
         if "lmp" in c.lower() and "type" not in c.lower():
             lmp_col = c
             break
 
-    lmp_m["YM"] = lmp_m["Time"].dt.to_period("M")
-    lmp_m["Bucket"] = lmp_m["Hour"].apply(
-        lambda h: "charge" if h in charge_hrs else ("discharge" if h in discharge_hrs else "other"))
-    mpr = lmp_m.groupby(["YM","Bucket"])[lmp_col].mean().unstack(fill_value=0)
-    if "charge" in mpr.columns and "discharge" in mpr.columns:
-        mpr["spread"] = mpr["discharge"] - mpr["charge"]
-    else:
-        mpr["spread"] = 40
+    price_by_hour = lmp_df.groupby("Hour")[lmp_col].mean()
 
-    days = 30
-    arb_cap = batt_mw * (1 - ir_frac)
+    # Std dev of forecast error by hour (from Tab 2 data)
+    std_by_hour = filt.groupby("Hour")["Net_Load_Error_MW"].std()
 
-    # Revenue streams — all in $k/month
-    rev_da = mpr["spread"] * arb_cap * eff * n_dis * days / 1000
-    rev_rt = rev_da * 0.12
-    rev_as = rev_da * 0.18
-    ir_cost = mpr["spread"] * batt_mw * ir_frac * eff * n_dis * days / 1000
+    x_labels = [f"HE{h}" for h in price_by_hour.index]
 
-    labels = [str(p) for p in rev_da.index]
-    totals = rev_da + rev_rt + rev_as
+    from plotly.subplots import make_subplots
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # $/kW-month: totals is $k, so totals/batt_mw = $k/MW = $/kW
-    avg_kwmo = totals.mean() / batt_mw if batt_mw else 0
+    # Price bars
+    fig.add_trace(go.Bar(
+        x=x_labels, y=price_by_hour.values,
+        name="Avg DA LMP ($/MWh)",
+        marker_color="#F59E0B", opacity=0.7,
+    ), secondary_y=False)
 
-    mc1, mc2, mc3 = st.columns(3)
-    mc1.metric("Avg $/kW-month", f"${avg_kwmo:.2f}")
-    mc2.metric("Avg IR opp. cost/mo", f"${ir_cost.mean():,.0f}k")
-    total_addr = totals.mean() + ir_cost.mean()
-    pct_lost = ir_cost.mean() / total_addr * 100 if total_addr > 0 else 0
-    mc3.metric("Revenue lost to IR", f"{pct_lost:.0f}%")
-
-    # Stacked bar — revenue only, IR cost as dashed line overlay
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=labels, y=rev_da, name="DA Energy", marker_color="#F59E0B"))
-    fig.add_trace(go.Bar(x=labels, y=rev_rt, name="RT Energy", marker_color="#EF4444"))
-    fig.add_trace(go.Bar(x=labels, y=rev_as, name="Ancillary services", marker_color="#34D399"))
-
-    # Total labels on top
+    # Uncertainty line on secondary axis
     fig.add_trace(go.Scatter(
-        x=labels, y=totals + max(totals.max()*0.04, 5),
-        text=[f"${v:,.0f}k" for v in totals], mode="text",
-        textposition="top center", textfont=dict(size=10, color="gray"),
-        showlegend=False,
-    ))
+        x=x_labels, y=std_by_hour.values,
+        name="Forecast error std dev (MW)",
+        mode="lines+markers",
+        line=dict(color="#EF4444", width=2.5),
+        marker=dict(size=5, color="#EF4444"),
+    ), secondary_y=True)
 
-    # IR cost as dashed line (not negative bars)
-    if ir_pct > 0:
-        fig.add_trace(go.Scatter(
-            x=labels, y=ir_cost.values,
-            mode="lines+markers", name="IR opportunity cost",
-            line=dict(color="#EF4444", width=2, dash="dash"),
-            marker=dict(size=5, color="#EF4444"),
-        ))
+    # Annotate charge and discharge windows
+    fig.add_vrect(x0="HE10", x1="HE15", fillcolor="rgba(59,130,246,0.08)",
+                  line_width=0, annotation_text="Charge window",
+                  annotation_position="top left",
+                  annotation_font=dict(size=10, color="gray"))
+    fig.add_vrect(x0="HE17", x1="HE21", fillcolor="rgba(16,185,129,0.08)",
+                  line_width=0, annotation_text="Discharge window",
+                  annotation_position="top left",
+                  annotation_font=dict(size=10, color="gray"))
 
     fig.update_layout(
-        title=f"Estimated BESS monthly merchant revenue — {batt_mw} MW / {duration}-hr",
-        height=440, template="plotly_white", barmode="stack",
-        margin=dict(l=60,r=20,t=60,b=60),
-        yaxis_title="Revenue ($k)", xaxis=dict(tickangle=-45),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=11)),
+        title="DA price profile vs. forecast uncertainty by hour",
+        height=420, template="plotly_white",
+        margin=dict(l=60, r=60, t=50, b=50),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
     )
+    fig.update_yaxes(title_text="DA LMP ($/MWh)", secondary_y=False)
+    fig.update_yaxes(title_text="Forecast error std dev (MW)", secondary_y=True)
     st.plotly_chart(fig, use_container_width=True)
 
-    # Key finding — in $/kW-year to match industry benchmarks (Modo: $40-51/kW-yr)
-    annual_lost = ir_cost.sum()
-    annual_rev = totals.sum()
-    total_addr = annual_rev + annual_lost
-    pct = annual_lost / total_addr * 100 if total_addr > 0 else 0
-    kw = batt_mw * 1000 if batt_mw else 1
-    lost_kwyr = annual_lost * 1000 / kw   # $k → $ → per kW
-    addr_kwyr = total_addr * 1000 / kw
-    st.info(
-        f"**At {ir_pct}% IR hold**, this battery forgoes ≈**\\${lost_kwyr:,.0f}/kW-year** "
-        f"in energy arbitrage — **{pct:.0f}%** of total addressable revenue "
-        f"(≈\\${addr_kwyr:,.0f}/kW-year) — to hold reserves that CAISO's DMM found were "
-        f"needed at the 97.5th percentile on only ~15% of days."
+    # Insight blurb
+    charge_price = price_by_hour.loc[10:15].mean()
+    discharge_price = price_by_hour.loc[17:21].mean()
+    charge_std = std_by_hour.loc[10:15].mean()
+    discharge_std = std_by_hour.loc[17:21].mean()
+
+    st.markdown(
+        f"**The overlap is clear.** The battery charge window (HE10–15) has average "
+        f"prices of **${charge_price:.0f}/MWh** and average forecast uncertainty of "
+        f"**{charge_std:,.0f} MW** std dev — these are the hours with both the cheapest "
+        f"energy and the highest uncertainty. IR capacity held for these hours directly "
+        f"competes with the charging opportunity.\n\n"
+        f"The discharge window (HE17–21) has average prices of **${discharge_price:.0f}/MWh** "
+        f"but lower uncertainty (**{discharge_std:,.0f} MW** std dev). Holding IR for "
+        f"these evening hours locks up capacity when there's less forecast risk "
+        f"but the highest arbitrage value.\n\n"
+        f"Under RUC, operators could target coverage only at the high-uncertainty hours "
+        f"and leave the rest free. The new IR product at P97.5 for all hours doesn't "
+        f"make that distinction."
     )
 
-    with st.expander("Methodology"):
-        st.markdown(
-            "**DA Energy:** (avg discharge price − avg charge price) × available MW × "
-            "efficiency × discharge hours × 30 days. Charge hours: HE10-15 PT (solar trough), "
-            "discharge: HE17-21 PT (evening ramp).\n\n"
-            "**RT Energy:** Estimated at 12% of DA revenue (industry average DA-RT uplift).\n\n"
-            "**Ancillary services:** Estimated at 18% of total stack (per DMM 2024 battery report, "
-            "batteries provide ~84% of CAISO regulation but AS share of revenue is declining).\n\n"
-            "**IR opportunity cost:** Same spread calculation applied to the MW fraction held for IR. "
-            "This capacity cannot participate in the IFM energy market.\n\n"
-            "This is a simplified model. Actual revenues depend on bid strategy, state-of-charge "
-            "constraints, congestion, and market power mitigation. Industry benchmark: ~$40-51/kW-year "
-            "in 2024-2025 (Modo Energy)."
-        )
+    # --- Chart 2: Simple spread metric ---
+    st.divider()
+    st.subheader("What's the arbitrage spread worth?")
+
+    spread = discharge_price - charge_price
+    mc1, mc2, mc3 = st.columns(3)
+    mc1.metric("Avg charge price (HE10-15)", f"${charge_price:.0f}/MWh")
+    mc2.metric("Avg discharge price (HE17-21)", f"${discharge_price:.0f}/MWh")
+    mc3.metric("Avg spread", f"${spread:.0f}/MWh")
+
+    st.markdown(
+        f"A 100 MW / 4-hr battery capturing this spread at 88% efficiency earns roughly "
+        f"**${spread * 100 * 0.88 * 4 * 365 / 1e6:.1f}M/year** in DA arbitrage alone — "
+        f"or about **${spread * 0.88 * 4 * 30 / 1000:.1f}k/kW-month**. "
+        f"Modo Energy's CAISO benchmark is $2–4/kW-month; this estimate is at the high end "
+        f"because it assumes full capture of the spread (real batteries achieve 60–80%).\n\n"
+        f"Every MW of capacity committed to IR during the charge or discharge windows "
+        f"is a MW that cannot participate in this spread. Whether that tradeoff is "
+        f"worthwhile depends on the IR capacity payment — which isn't available yet "
+        f"under EDAM — versus the arbitrage revenue foregone."
+    )
 
 
 # ---------------------------------------------------------------------------
