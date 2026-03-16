@@ -68,14 +68,15 @@ def load_lmps():
     p = DATA_DIR / "dam_lmps.csv"
     if p.exists():
         df = pd.read_csv(p)
-        df["Time"] = pd.to_datetime(df["Time"], utc=True)
-        # Filter to one hub — LMP file has NP15, SP15, ZP26 stacked
+        # Timestamps have mixed offsets (-08:00 PST, -07:00 PDT) - parse with utc then convert
+        df["Time"] = pd.to_datetime(df["Time"], utc=True).dt.tz_convert("US/Pacific")
+        # Filter to one hub
         if "Location" in df.columns:
             locs = df["Location"].unique()
             sp15 = [l for l in locs if "SP15" in str(l)]
             df = df[df["Location"] == (sp15[0] if sp15 else locs[0])].copy()
-        if "Hour" not in df.columns: df["Hour"] = df["Time"].dt.hour + 1
-        if "Month" not in df.columns: df["Month"] = df["Time"].dt.month
+        df["Hour"] = df["Time"].dt.hour + 1  # HE1-HE24 Pacific
+        df["Month"] = df["Time"].dt.month
         return df
     return _synth_lmps()
 
@@ -299,13 +300,9 @@ with tab3:
         marker=dict(size=5, color="#EF4444"),
     ), secondary_y=True)
 
-    # Annotate charge and discharge windows
-    fig.add_vrect(x0="HE10", x1="HE15", fillcolor="rgba(59,130,246,0.08)",
-                  line_width=0, annotation_text="Charge window",
-                  annotation_position="top left",
-                  annotation_font=dict(size=10, color="gray"))
-    fig.add_vrect(x0="HE17", x1="HE21", fillcolor="rgba(16,185,129,0.08)",
-                  line_width=0, annotation_text="Discharge window",
+    # Highlight the high-uncertainty zone
+    fig.add_vrect(x0="HE9", x1="HE16", fillcolor="rgba(239,68,68,0.06)",
+                  line_width=0, annotation_text="Peak uncertainty",
                   annotation_position="top left",
                   annotation_font=dict(size=10, color="gray"))
 
@@ -326,40 +323,25 @@ with tab3:
     discharge_std = std_by_hour.loc[17:21].mean()
 
     st.markdown(
-        f"**The overlap is clear.** The battery charge window (HE10–15) has average "
-        f"prices of **${charge_price:.0f}/MWh** and average forecast uncertainty of "
-        f"**{charge_std:,.0f} MW** std dev — these are the hours with both the cheapest "
-        f"energy and the highest uncertainty. IR capacity held for these hours directly "
-        f"competes with the charging opportunity.\n\n"
-        f"The discharge window (HE17–21) has average prices of **${discharge_price:.0f}/MWh** "
-        f"but lower uncertainty (**{discharge_std:,.0f} MW** std dev). Holding IR for "
-        f"these evening hours locks up capacity when there's less forecast risk "
-        f"but the highest arbitrage value.\n\n"
-        f"Under RUC, operators could target coverage only at the high-uncertainty hours "
-        f"and leave the rest free. The new IR product at P97.5 for all hours doesn't "
-        f"make that distinction."
-    )
-
-    # --- Chart 2: Simple spread metric ---
-    st.divider()
-    st.subheader("What's the arbitrage spread worth?")
-
-    spread = discharge_price - charge_price
-    mc1, mc2, mc3 = st.columns(3)
-    mc1.metric("Avg charge price (HE10-15)", f"${charge_price:.0f}/MWh")
-    mc2.metric("Avg discharge price (HE17-21)", f"${discharge_price:.0f}/MWh")
-    mc3.metric("Avg spread", f"${spread:.0f}/MWh")
-
-    st.markdown(
-        f"A 100 MW / 4-hr battery capturing this spread at 88% efficiency earns roughly "
-        f"**${spread * 100 * 0.88 * 4 * 365 / 1e6:.1f}M/year** in DA arbitrage alone — "
-        f"or about **${spread * 0.88 * 4 * 30 / 1000:.1f}k/kW-month**. "
-        f"Modo Energy's CAISO benchmark is $2–4/kW-month; this estimate is at the high end "
-        f"because it assumes full capture of the spread (real batteries achieve 60–80%).\n\n"
-        f"Every MW of capacity committed to IR during the charge or discharge windows "
-        f"is a MW that cannot participate in this spread. Whether that tradeoff is "
-        f"worthwhile depends on the IR capacity payment — which isn't available yet "
-        f"under EDAM — versus the arbitrage revenue foregone."
+        f"**Uncertainty peaks where solar drives the forecast error.** The hours with "
+        f"the highest forecast uncertainty (HE9-16, peaking at ~2,100 MW std dev) "
+        f"coincide with the solar ramp-up and ramp-down. These are also the hours "
+        f"when prices are falling as solar floods the grid (HE10-15 average "
+        f"**${charge_price:.0f}/MWh**). Batteries charge during these cheap hours. "
+        f"IR capacity held for these high-uncertainty hours directly competes with "
+        f"the charging opportunity.\n\n"
+        f"**Evening and overnight hours have low uncertainty but higher prices.** "
+        f"HE17-21 average **${discharge_price:.0f}/MWh** with only "
+        f"**{discharge_std:,.0f} MW** std dev of forecast error. The early morning hours "
+        f"(HE1-6) have the highest prices in this dataset. The IR requirement for these "
+        f"low-uncertainty hours would be small, but under the new product it's still "
+        f"set at P97.5.\n\n"
+        f"**A battery that can't fully charge can't fully discharge.** If IR holds back "
+        f"capacity during the cheap midday hours, the battery stores less energy. That "
+        f"constraint cascades: less stored energy means less to sell during the high-price "
+        f"hours. Under RUC, operators targeted coverage at specific hours and chose the "
+        f"percentile based on conditions. They applied P97.5 to all hours on just one day "
+        f"in Q3 2024 (August 6). The new IR product applies P97.5 to all hours of all days."
     )
 
 
