@@ -22,16 +22,6 @@ Three tabs:
 
 3. **IR vs. battery arbitrage** - Overlays the DA price profile with the uncertainty profile by hour. Shows that the hours with highest uncertainty (solar transition, HE9-16) overlap with the hours batteries charge (cheap midday prices), while the hours with highest arbitrage value (evening ramp) have low uncertainty. IR and battery arbitrage compete for the same capacity during the same hours.
 
-## Key findings
-
-- **The forecast has a negative bias** (approximately -1,100 MW mean). The DA forecast consistently over-predicts net load, likely because wind and solar beat day-ahead expectations. This bias is larger than expected and may partially reflect a data alignment issue between the two OASIS sources used (see Limitations).
-
-- **Uncertainty concentrates in solar transition hours.** HE9 through HE16 (Pacific) show the widest forecast error distributions and the highest volatility, peaking around 2,100 MW std dev at HE13-15. Overnight and evening hours have minimal uncertainty (400-500 MW std dev).
-
-- **IR and battery arbitrage compete for the same hours.** The battery charge window (HE10-15, cheapest prices) overlaps with peak forecast uncertainty. IR capacity held for these hours directly competes with the charging opportunity. Meanwhile, the discharge window (HE17-21, most expensive prices) has low uncertainty, meaning IR held for those hours locks up the most valuable arbitrage capacity against a risk the data says is small.
-
-- **Under RUC, operators made this distinction.** They applied higher coverage to peak hours and lower coverage (or none) to off-peak hours. They used P97.5 on only 15% of days. The new IR product does not make this distinction.
-
 ## Quickstart
 
 ```bash
