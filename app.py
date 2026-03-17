@@ -14,8 +14,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
-from scipy import stats
+from plotly.subplots import make_subplots
 from pathlib import Path
 
 st.set_page_config(page_title="CAISO IR Uncertainty", page_icon="⚡", layout="wide")
@@ -112,7 +111,7 @@ filt = df[df["Season"].isin(seasons) & df["Month"].isin(months)].copy()
 # ===========================================================================
 tab1, tab2, tab3 = st.tabs([
     "📊 Uncertainty profile",
-    "📈 Requirement vs. reality",
+    "📈 Where uncertainty concentrates",
     "🔋 IR vs. battery arbitrage",
 ])
 
@@ -177,35 +176,55 @@ with tab1:
         f"upper tail stays near zero."
     )
 
-    # Histogram with normal overlay — just to show shape
-    st.subheader("Distribution shape")
-    mu, sigma = err.mean(), err.std()
-    fh = go.Figure()
-    fh.add_trace(go.Histogram(
-        x=err, nbinsx=80, histnorm="probability density",
-        marker_color="rgba(59,130,246,0.4)", name="Observed",
-    ))
-    xs = np.linspace(err.min(), err.max(), 200)
-    fh.add_trace(go.Scatter(
-        x=xs, y=stats.norm.pdf(xs, mu, sigma), mode="lines",
-        name=f"Normal fit (σ={sigma:,.0f} MW)", line=dict(color="#EF4444", width=2),
-    ))
-    fh.update_layout(
-        height=280, template="plotly_white",
-        margin=dict(l=40,r=20,t=20,b=40),
-        xaxis_title="Forecast error (MW)", yaxis_title="Density",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+    # Histogram for a single hour — lets user explore the distribution shape
+    st.subheader("Distribution shape by hour")
+    sel_hour = st.selectbox(
+        "Select hour ending", HOURS, index=14,  # default HE15
+        format_func=lambda h: f"HE{h}",
     )
-    st.plotly_chart(fh, use_container_width=True)
+    hour_data = filt.loc[filt["Hour"] == sel_hour, "Net_Load_Error_MW"].dropna()
 
-    sk, ku = err.skew(), err.kurtosis()
-    st.markdown(
-        f"Skewness: **{sk:.2f}** · Excess kurtosis: **{ku:.2f}** — "
-        f"{'the distribution is approximately normal.' if abs(sk)<0.5 and abs(ku)<1 else 'the distribution departs from normality.'} "
-        f"{'The high kurtosis means the distribution is more peaked than a normal — most hours cluster tightly around the mean, but extreme events in the tails are more frequent than a Gaussian predicts. ' if ku > 1 else ''}"
-        f"This matters because the IR demand curve targets the 97.5th percentile — "
-        f"deep in the tail where the distribution's shape has the most impact."
-    )
+    if len(hour_data) > 10:
+        h_p975 = hour_data.quantile(0.975)
+        h_p75 = hour_data.quantile(0.75)
+        h_p50 = hour_data.quantile(0.50)
+
+        fh = go.Figure()
+        fh.add_trace(go.Histogram(
+            x=hour_data, nbinsx=40, histnorm="probability density",
+            marker_color="rgba(59,130,246,0.4)", name="Observed",
+        ))
+        fh.add_vline(x=h_p975, line_color="#EF4444", line_dash="dash",
+                     annotation_text=f"P97.5: {h_p975:+,.0f} MW",
+                     annotation_position="top right",
+                     annotation_font=dict(size=10, color="#EF4444"))
+        fh.add_vline(x=h_p75, line_color="#F59E0B", line_dash="dot",
+                     annotation_text=f"P75: {h_p75:+,.0f} MW",
+                     annotation_position="top right",
+                     annotation_font=dict(size=10, color="#F59E0B"))
+        fh.add_vline(x=h_p50, line_color="#3B82F6", line_dash="dot",
+                     annotation_text=f"Median: {h_p50:+,.0f} MW",
+                     annotation_position="top left",
+                     annotation_font=dict(size=10, color="#3B82F6"))
+        fh.update_layout(
+            title=f"Forecast error distribution at HE{sel_hour}",
+            height=300, template="plotly_white",
+            margin=dict(l=40, r=20, t=40, b=40),
+            xaxis_title="Forecast error (MW)", yaxis_title="Density",
+            showlegend=False,
+        )
+        st.plotly_chart(fh, use_container_width=True)
+
+        st.markdown(
+            f"**HE{sel_hour}** — {len(hour_data)} observations. "
+            f"Mean: **{hour_data.mean():+,.0f} MW**, "
+            f"std dev: **{hour_data.std():,.0f} MW**. "
+            f"The gap between P75 ({h_p75:+,.0f}) and P97.5 ({h_p975:+,.0f}) "
+            f"is **{h_p975 - h_p75:,.0f} MW** — that's the tail the demand curve "
+            f"covers beyond what operators historically chose most of the time."
+        )
+    else:
+        st.info(f"Not enough data for HE{sel_hour} with the current filters.")
 
 
 # ===========================================================================
@@ -214,13 +233,8 @@ with tab1:
 with tab2:
     st.header("Where does forecast uncertainty concentrate?")
     st.markdown(
-        "Under the RUC process, operators had discretion to choose coverage levels — "
-        "they applied P97.5 on only 15% of days, choosing P75 on 51% and P50 on 34% "
-        "(DMM Q3 2024 Report, Section 10.3). The new IR product under EDAM will fix "
-        "the demand curve at P97.5 for all hours of all days. The DMM's assessment: "
-        "this 'may be much too high during most hours.' The charts below show the "
-        "underlying forecast error distribution — the same uncertainty both RUC and "
-        "IR are designed to cover."
+        "Not all hours carry the same forecast risk. This heatmap shows the "
+        "standard deviation of net load forecast error by hour and month."
     )
 
     # Heatmap — std dev of forecast error by hour × month
@@ -281,7 +295,6 @@ with tab3:
 
     x_labels = [f"HE{h}" for h in price_by_hour.index]
 
-    from plotly.subplots import make_subplots
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
     # Price bars
