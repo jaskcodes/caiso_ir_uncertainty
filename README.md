@@ -107,4 +107,4 @@ README.md
 
 ## Tools and AI usage
 
-Built with AI assistance (Claude) for: OASIS API research, data pipeline code, chart design, and iteration. The problem selection, market context, and analytical framing are my own.
+Built with AI assistance (Claude) for: OASIS API research, data pipeline code and iteration. The problem selection, market context, dashboard design and analytical framing are my own.
